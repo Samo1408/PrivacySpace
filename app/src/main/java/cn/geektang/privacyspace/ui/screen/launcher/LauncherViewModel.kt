@@ -42,16 +42,12 @@ class LauncherViewModel(private val context: Application) : AndroidViewModel(con
                 configData.value = it
                 hiddenAppList.clear()
                 hiddenAppList.addAll(it.hiddenAppList.mapToAppInfoList())
-
                 sharedUserIdMap.clear()
                 sharedUserIdMap.putAll(it.sharedUserIdMap ?: emptyMap())
-
                 connectedApps.clear()
                 connectedApps.putAll(it.connectedApps)
-
                 multiUserConfig.clear()
                 multiUserConfig.putAll(it.multiUserConfig ?: emptyMap())
-
                 blindApps.clear()
                 blindApps.addAll(it.blind ?: emptySet())
             }
@@ -61,31 +57,18 @@ class LauncherViewModel(private val context: Application) : AndroidViewModel(con
     private fun Set<String>.mapToAppInfoList(): List<AppInfo> {
         return this.mapNotNull { packageName ->
             try {
-                getPackageInfo(
-                    context = context,
-                    packageName = packageName,
-                    PackageManager.MATCH_UNINSTALLED_PACKAGES or PackageManager.GET_META_DATA
-                )
-            } catch (e: Throwable) {
-                null
-            }
+                getPackageInfo(context = context, packageName = packageName,
+                    PackageManager.MATCH_UNINSTALLED_PACKAGES or PackageManager.GET_META_DATA)
+            } catch (e: Throwable) { null }
+        }.sortedWith(DisplayNameComparator(context.packageManager)).map { packageInfo ->
+            val applicationInfo = packageInfo.applicationInfo ?: return@mapNotNull null
+            val appName = applicationInfo.loadLabel(context.packageManager).toString()
+            val appIcon = applicationInfo.loadIcon(context.packageManager)
+            val isXposed = applicationInfo.isXposedModule()
+            AppInfo(applicationInfo = applicationInfo, packageName = applicationInfo.packageName,
+                appName = appName, appIcon = appIcon, sharedUserId = packageInfo.sharedUserId,
+                isSystemApp = AppHelper.isSystemApp(applicationInfo), isXposedModule = isXposed)
         }
-            .sortedWith(DisplayNameComparator(context.packageManager))
-            .map { packageInfo ->
-                val applicationInfo = packageInfo.applicationInfo
-                val appName = applicationInfo.loadLabel(context.packageManager).toString()
-                val appIcon = applicationInfo.loadIcon(context.packageManager)
-                val isXposedModule = applicationInfo.isXposedModule()
-                AppInfo(
-                    applicationInfo = applicationInfo,
-                    packageName = applicationInfo.packageName,
-                    appName = appName,
-                    appIcon = appIcon,
-                    sharedUserId = packageInfo.sharedUserId,
-                    isSystemApp = AppHelper.isSystemApp(applicationInfo),
-                    isXposedModule = isXposedModule
-                )
-            }
     }
 
     class DisplayNameComparator(packageManager: PackageManager) : Comparator<PackageInfo> {
@@ -99,67 +82,47 @@ class LauncherViewModel(private val context: Application) : AndroidViewModel(con
         val hasChange = this.hiddenAppList.removeIf { it.packageName == appInfo.packageName }
         if (hasChange) {
             multiUserConfig.remove(appInfo.packageName)
-            if (!blindApps.contains(appInfo.packageName)) {
-                connectedApps.remove(appInfo.packageName)
-            }
+            if (!blindApps.contains(appInfo.packageName)) connectedApps.remove(appInfo.packageName)
         }
         needSync = needSync or hasChange
     }
 
     fun connectTo(sourceApp: AppInfo, targetApp: String) {
-        val connectedAppsForSourceApp =
-            connectedApps[sourceApp.packageName]?.toMutableSet() ?: mutableSetOf()
+        val connectedAppsForSourceApp = connectedApps[sourceApp.packageName]?.toMutableSet() ?: mutableSetOf()
         connectedAppsForSourceApp.add(targetApp)
         connectedApps[sourceApp.packageName] = connectedAppsForSourceApp
-
         val sharedUserIdForSourceApp = sourceApp.sharedUserId
-        if (!sharedUserIdForSourceApp.isNullOrEmpty()) {
-            sharedUserIdMap[sourceApp.packageName] = sharedUserIdForSourceApp
-        }
-
+        if (!sharedUserIdForSourceApp.isNullOrEmpty()) sharedUserIdMap[sourceApp.packageName] = sharedUserIdForSourceApp
         val sharedUserIdForTargetApp = sourceApp.sharedUserId
-        if (!sharedUserIdForTargetApp.isNullOrEmpty()) {
-            sharedUserIdMap[targetApp] = sharedUserIdForTargetApp
-        }
-
+        if (!sharedUserIdForTargetApp.isNullOrEmpty()) sharedUserIdMap[targetApp] = sharedUserIdForTargetApp
         needSync = true
     }
 
     fun disconnectTo(sourceApp: AppInfo, targetApp: String) {
-        val connectedAppsForSourceApp =
-            connectedApps[sourceApp.packageName]?.toMutableSet() ?: mutableSetOf()
+        val connectedAppsForSourceApp = connectedApps[sourceApp.packageName]?.toMutableSet() ?: mutableSetOf()
         val hasChange = connectedAppsForSourceApp.remove(targetApp)
         connectedApps[sourceApp.packageName] = connectedAppsForSourceApp
         needSync = needSync or hasChange
     }
 
     suspend fun syncConfig() {
-        if (needSync) {
-            needSync = false
-            syncConfigInner()
-        }
+        if (needSync) { needSync = false; syncConfigInner() }
     }
 
     private suspend fun syncConfigInner() {
-        ConfigHelper.updateConfig(
-            configData.value.copy(
-                hiddenAppList = hiddenAppList.map { it.packageName }.toSet(),
-                sharedUserIdMap = sharedUserIdMap.toMap(),
-                connectedApps = connectedApps.toMap(),
-                multiUserConfig = multiUserConfig.toMap()
-            )
-        )
+        ConfigHelper.updateConfig(configData.value.copy(
+            hiddenAppList = hiddenAppList.map { it.packageName }.toSet(),
+            sharedUserIdMap = sharedUserIdMap.toMap(),
+            connectedApps = connectedApps.toMap(),
+            multiUserConfig = multiUserConfig.toMap()
+        ))
     }
 
     fun changeMultiUserConfig(appInfo: AppInfo, checkedUsers: Set<Int>?) {
         if (multiUserConfig[appInfo.packageName] != checkedUsers) {
-            if (null == checkedUsers) {
-                multiUserConfig.remove(appInfo.packageName)
-            } else {
-                multiUserConfig[appInfo.packageName] = checkedUsers
-            }
+            if (null == checkedUsers) multiUserConfig.remove(appInfo.packageName)
+            else multiUserConfig[appInfo.packageName] = checkedUsers
             needSync = true
-
             if (ConfigHelper.getServerVersion() < 17) {
                 context.showToast(R.string.configuration_takes_effect_after_restarting_the_phone_system)
             }
