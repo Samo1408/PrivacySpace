@@ -8,14 +8,12 @@ import cn.geektang.privacyspace.util.ConfigHelper.getPackageName
 import cn.geektang.privacyspace.util.HookUtil
 import cn.geektang.privacyspace.util.XLog
 import cn.geektang.privacyspace.util.tryLoadClass
-import io.github.libxposed.api.XposedInterface
-import io.github.libxposed.api.XposedModule
-import io.github.libxposed.api.annotations.AfterInvocation
-import io.github.libxposed.api.annotations.XposedHooker
+import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XposedBridge
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 
-object FrameworkHookerApi28Impl : Hooker {
+object FrameworkHookerApi28Impl : XC_MethodHook(), Hooker {
     private lateinit var pmsClass: Class<*>
     private lateinit var settingsClass: Class<*>
     private lateinit var mSettingsField: Field
@@ -29,106 +27,62 @@ object FrameworkHookerApi28Impl : Hooker {
             pmsClass = HookUtil.loadPms(classLoader) ?: throw PackageManager.NameNotFoundException()
             mSettingsField = pmsClass.getDeclaredField("mSettings")
             mSettingsField.isAccessible = true
-
             settingsClass = classLoader.tryLoadClass("com.android.server.pm.Settings")
-            getAppIdMethod =
-                UserHandle::class.java.getDeclaredMethod("getAppId", Int::class.javaPrimitiveType)
+            getAppIdMethod = UserHandle::class.java.getDeclaredMethod("getAppId", Int::class.javaPrimitiveType)
             getAppIdMethod.isAccessible = true
-
             for (method in settingsClass.declaredMethods) {
                 if ((method.name == "getSettingLPr" || method.name == "getUserIdLPr")
                     && method.parameterCount == 1
                     && method.parameterTypes.first() == Int::class.javaPrimitiveType
-                ) {
-                    getSettingLPrMethod = method
-                    method.isAccessible = true
-                    break
-                }
+                ) { getSettingLPrMethod = method; method.isAccessible = true; break }
             }
-        } catch (e: Throwable) {
-            XLog.e(e, "pms load failed.")
-            return
-        }
+        } catch (e: Throwable) { XLog.e(e, "pms load failed."); return }
+
         pmsClass.declaredMethods.forEach { method ->
             when (method.name) {
-                "filterAppAccessLPr" -> {
-                    if (method.parameterCount == 5) {
-                        XposedModule.hook(method, FilterAppAccessHooker::class.java)
-                    }
-                }
-                "applyPostResolutionFilter" -> {
-                    XposedModule.hook(method, ApplyPostResolutionFilterHooker::class.java)
-                }
+                "filterAppAccessLPr" -> { if (method.parameterCount == 5) XposedBridge.hookMethod(method, this) }
+                "applyPostResolutionFilter" -> XposedBridge.hookMethod(method, this)
                 else -> {}
             }
         }
+    }
+
+    override fun afterHookedMethod(param: MethodHookParam) {
+        when (param.method.name) {
+            "filterAppAccessLPr" -> hookFilterAppAccess(param)
+            "applyPostResolutionFilter" -> hookApplyPostResolutionFilter(param)
+        }
+    }
+
+    private fun hookApplyPostResolutionFilter(param: MethodHookParam) {
+        val resultList = param.result as? MutableList<*> ?: return
+        val callingUid = param.args[3] as? Int ?: return
+        val userId = param.args[5] as? Int ?: return
+        val callingPackageName = getPackageName(param.thisObject, callingUid) ?: return
+        val waitRemoveList = mutableListOf<ResolveInfo>()
+        for (resolveInfo in resultList) {
+            val targetPackageName = (resolveInfo as? ResolveInfo)?.getPackageName() ?: continue
+            if (HookChecker.shouldIntercept(classLoader, userId, targetPackageName, callingPackageName))
+                waitRemoveList.add(resolveInfo)
+        }
+        for (resolveInfo in waitRemoveList) resultList.remove(resolveInfo)
+        if (waitRemoveList.isNotEmpty()) param.result = resultList
+    }
+
+    private fun hookFilterAppAccess(param: MethodHookParam) {
+        if (param.result == true) return
+        val packageSetting = param.args.first()
+        val targetPackageName = packageSetting?.packageName ?: return
+        val callingUid = param.args[1] as Int
+        val userId = param.args[4] as Int
+        val callingPackageName = getPackageName(param.thisObject, callingUid) ?: return
+        if (HookChecker.shouldIntercept(classLoader, userId, targetPackageName, callingPackageName))
+            param.result = true
     }
 
     private fun getPackageName(pms: Any, uid: Int): String? {
         val callingAppId = getAppIdMethod.invoke(null, uid)
         val mSettings = mSettingsField.get(pms)
         return getSettingLPrMethod.invoke(mSettings, callingAppId)?.packageName
-    }
-
-    @XposedHooker
-    class FilterAppAccessHooker : XposedInterface.Hooker {
-        companion object {
-            @AfterInvocation
-            @JvmStatic
-            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
-                if (callback.result == true) {
-                    return
-                }
-                val packageSetting = callback.args.first()
-                val targetPackageName = packageSetting?.packageName ?: return
-                val callingUid = callback.args[1] as Int
-                val userId = callback.args[4] as Int
-                val callingPackageName = getPackageName(callback.thisObject, callingUid) ?: return
-
-                val shouldIntercept = HookChecker.shouldIntercept(
-                    classLoader,
-                    userId,
-                    targetPackageName,
-                    callingPackageName
-                )
-                if (shouldIntercept) {
-                    callback.result = true
-                }
-            }
-        }
-    }
-
-    @XposedHooker
-    class ApplyPostResolutionFilterHooker : XposedInterface.Hooker {
-        companion object {
-            @AfterInvocation
-            @JvmStatic
-            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
-                val resultList = callback.result as? MutableList<*> ?: return
-                val callingUid = callback.args[3] as? Int ?: return
-                val userId = callback.args[5] as? Int ?: return
-                val callingPackageName = getPackageName(callback.thisObject, callingUid) ?: return
-                val waitRemoveList = mutableListOf<ResolveInfo>()
-                for (resolveInfo in resultList) {
-                    val targetPackageName = (resolveInfo as? ResolveInfo)?.getPackageName() ?: continue
-                    val shouldIntercept = HookChecker.shouldIntercept(
-                        classLoader,
-                        userId,
-                        targetPackageName,
-                        callingPackageName
-                    )
-                    if (shouldIntercept) {
-                        waitRemoveList.add(resolveInfo)
-                    }
-                }
-
-                for (resolveInfo in waitRemoveList) {
-                    resultList.remove(resolveInfo)
-                }
-                if (waitRemoveList.isNotEmpty()) {
-                    callback.result = resultList
-                }
-            }
-        }
     }
 }
