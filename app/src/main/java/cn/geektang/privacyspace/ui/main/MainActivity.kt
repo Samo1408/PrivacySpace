@@ -1,7 +1,7 @@
 package cn.geektang.privacyspace.ui.main
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.MaterialTheme
@@ -28,7 +28,6 @@ import cn.geektang.privacyspace.util.AppHelper
 import cn.geektang.privacyspace.util.ConfigHelper
 import cn.geektang.privacyspace.util.LocalNavHostController
 import cn.geektang.privacyspace.util.NavHostControllerWrapper
-import com.google.accompanist.insets.ProvideWindowInsets
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -37,17 +36,11 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             PrivacySpaceTheme {
-                ProvideWindowInsets {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        color = MaterialTheme.colors.background
-                    ) {
-                        Content()
-                    }
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colors.background) {
+                    Content()
                 }
             }
         }
-
         lifecycleScope.launch {
             AppHelper.initialize(applicationContext)
         }
@@ -55,9 +48,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!isFinishing
-            && ConfigHelper.loadingStatusFlow.value == ConfigHelper.LOADING_STATUS_INIT
-        ) {
+        if (!isFinishing && ConfigHelper.loadingStatusFlow.value == ConfigHelper.LOADING_STATUS_INIT) {
             ConfigHelper.initConfig(applicationContext)
         }
     }
@@ -66,37 +57,18 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Content() {
     val navHostController = rememberNavController()
-
-    val navHostControllerWrapper = remember {
-        NavHostControllerWrapper(navHostController)
-    }
+    val navHostControllerWrapper = remember { NavHostControllerWrapper(navHostController) }
     CompositionLocalProvider(LocalNavHostController provides navHostControllerWrapper) {
-        NavHost(
-            navController = navHostController,
-            startDestination = RouteConstant.LAUNCHER
-        ) {
-            composable(RouteConstant.LAUNCHER) {
-                LauncherScreen()
-            }
-            composable(RouteConstant.ADD_HIDDEN_APPS) {
-                AddHiddenAppsScreen()
-            }
-            composable(RouteConstant.WHITELIST) {
-                SetWhitelistScreen()
-            }
+        NavHost(navController = navHostController, startDestination = RouteConstant.LAUNCHER) {
+            composable(RouteConstant.LAUNCHER) { LauncherScreen() }
+            composable(RouteConstant.ADD_HIDDEN_APPS) { AddHiddenAppsScreen() }
+            composable(RouteConstant.WHITELIST) { SetWhitelistScreen() }
             composable("${RouteConstant.SET_CONNECTED_APPS}?targetPackageName={targetPackageName}") {
-                argument("targetPackageName") {
-                    type = NavType.StringType
-                }
+                argument("targetPackageName") { type = NavType.StringType }
                 SetConnectedAppsScreen()
             }
-            composable(RouteConstant.BLACKLIST) {
-                AddBlindAppsScreen()
-            }
-
-            composable(RouteConstant.ABOUT) {
-                AboutScreen()
-            }
+            composable(RouteConstant.BLACKLIST) { AddBlindAppsScreen() }
+            composable(RouteConstant.ABOUT) { AboutScreen() }
         }
     }
 }
