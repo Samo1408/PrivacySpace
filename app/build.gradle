@@ -8,12 +8,12 @@ plugins {
 
 android {
     namespace 'cn.geektang.privacyspace'
-    compileSdk 35
+    compileSdk 37
 
     defaultConfig {
         applicationId "cn.geektang.privacyspace"
         minSdk 26
-        targetSdk 35
+        targetSdk 36
         versionCode 22
         versionName "2.0.0"
 
@@ -23,7 +23,6 @@ android {
         }
     }
 
-    // Signing config: only configure if env vars are set (not on CI)
     signingConfigs {
         if (System.env.Space_storeFile != null && !System.env.Space_storeFile.empty) {
             release {
@@ -89,7 +88,6 @@ dependencies {
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
     debugImplementation 'androidx.compose.ui:ui-tooling'
 
-    // Modern libxposed API 102
     compileOnly 'io.github.libxposed:api:102.0.0'
     implementation 'io.github.libxposed:service:102.0.0'
 
