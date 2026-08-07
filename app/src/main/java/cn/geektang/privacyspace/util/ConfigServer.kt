@@ -1,11 +1,7 @@
 package cn.geektang.privacyspace.util
 
-import android.app.ActivityThread
 import android.content.pm.PackageManager
-import android.content.pm.UserInfo
 import android.os.Binder
-import android.os.ServiceManager
-import android.os.SystemProperties
 import cn.geektang.privacyspace.BuildConfig
 import cn.geektang.privacyspace.bean.SystemUserInfo
 import cn.geektang.privacyspace.constant.ConfigConstant
@@ -40,14 +36,10 @@ class ConfigServer : XC_MethodHook() {
         XposedHelpers.findAndHookMethod(pmsClass, "getInstallerPackageName", String::class.java, this)
         val userManagerClass = try {
             classLoader.tryLoadClass("com.android.server.pm.UserManagerService")
-        } catch (e: ClassNotFoundException) {
-            XLog.e(e, "Find UserManagerService failed."); return
-        }
+        } catch (e: ClassNotFoundException) { XLog.e(e, "Find UserManagerService failed."); return }
         userManagerClass.declaredMethods.filter { it.checkIsGetUsersMethod() }.forEach { method ->
             XposedBridge.hookMethod(method, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    userInfoListCache = param.result as? Collection<*>?
-                }
+                override fun afterHookedMethod(param: MethodHookParam) { userInfoListCache = param.result as? Collection<*>? }
             })
         }
     }
@@ -64,11 +56,23 @@ class ConfigServer : XC_MethodHook() {
             firstArg == QUERY_SERVER_VERSION -> param.result = BuildConfig.VERSION_CODE.toString()
             firstArg == MIGRATE_OLD_CONFIG_FILE -> { tryMigrateOldConfig(); param.result = "" }
             firstArg == QUERY_CONFIG -> param.result = queryConfig()
-            firstArg == REBOOT_THE_SYSTEM -> { SystemProperties.set("sys.powerctl", "reboot"); param.result = "" }
+            firstArg == REBOOT_THE_SYSTEM -> {
+                try { Class.forName("android.os.SystemProperties").getMethod("set", String::class.java, String::class.java).invoke(null, "sys.powerctl", "reboot") } catch (_: Exception) {}
+                param.result = ""
+            }
             firstArg == GET_USERS -> {
                 val users = userInfoListCache
                 val systemUsers = mutableListOf<SystemUserInfo>()
-                users?.forEach { if (it is UserInfo) systemUsers.add(SystemUserInfo(id = it.id, name = it.name)) }
+                users?.forEach { userInfo ->
+                    try {
+                        val uiClass = Class.forName("android.content.pm.UserInfo")
+                        if (uiClass.isInstance(userInfo)) {
+                            val idField = uiClass.getDeclaredField("id").apply { isAccessible = true }
+                            val nameField = uiClass.getDeclaredField("name").apply { isAccessible = true }
+                            systemUsers.add(SystemUserInfo(id = idField.getInt(userInfo), name = nameField.get(userInfo) as? String ?: ""))
+                        }
+                    } catch (_: Exception) {}
+                }
                 param.result = JsonHelper.systemUserInfoListAdapter().toJson(systemUsers)
             }
             firstArg.startsWith(UPDATE_CONFIG) -> { updateConfig(firstArg.substring(UPDATE_CONFIG.length)); param.result = "" }
@@ -76,19 +80,21 @@ class ConfigServer : XC_MethodHook() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun forceStopPackage(packageName: String): String {
         XLog.d("forceStopPackage = $packageName")
         val callingUid = Binder.getCallingUid()
-        val ams = ServiceManager.getService("activity")
-        val checkPermissionUnhook = XposedHelpers.findAndHookMethod(ams.javaClass, "checkPermission",
-            String::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+        val ams = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "activity")
+        val amsJavaClass: Class<*> = (ams as Any).javaClass
+        val checkPermissionUnhook = XposedHelpers.findAndHookMethod(amsJavaClass, "checkPermission",
+            String::class.java, Integer.TYPE, Integer.TYPE,
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (callingUid == param.args[2]) param.result = PackageManager.PERMISSION_GRANTED
                 }
             })
         return try {
-            val method = ams.javaClass.getDeclaredMethod("forceStopPackage", String::class.java, Int::class.javaPrimitiveType)
+            val method = amsJavaClass.getDeclaredMethod("forceStopPackage", String::class.java, Integer.TYPE)
             method.isAccessible = true; method.invoke(ams, packageName, 0); EXEC_SUCCEED
         } catch (e: Throwable) { XLog.e(e, "forceStopPackage $packageName failed."); EXEC_FAILED
         } finally { checkPermissionUnhook.unhook() }
@@ -105,16 +111,15 @@ class ConfigServer : XC_MethodHook() {
         } catch (e: Exception) { XLog.e(e, "Update config error.") }
     }
 
-    private fun getPackageUid(packageName: String) = try {
-        ActivityThread.getPackageManager().getPackageUid(packageName, 0, 0)
+    private fun getPackageUid(packageName: String): Int = try {
+        val atClass = Class.forName("android.app.ActivityThread")
+        val pm = atClass.getMethod("getPackageManager").apply { isAccessible = true }.invoke(null)
+        (pm as Any).javaClass.getMethod("getPackageUid", String::class.java, Integer.TYPE, Integer.TYPE).invoke(pm, packageName, 0, 0) as Int
     } catch (_: Throwable) { XLog.d("ConfigServer (${Binder.getCallingUid()}).getClientUid failed."); -1 }
 
     private fun tryMigrateOldConfig() {
         val newFile = File("${ConfigConstant.CONFIG_FILE_FOLDER}${ConfigConstant.CONFIG_FILE_JSON}")
-        if (!newFile.exists()) {
-            newFile.parentFile?.mkdirs()
-            File("${ConfigConstant.CONFIG_FILE_FOLDER_ORIGINAL}${ConfigConstant.CONFIG_FILE_JSON}").copyTo(newFile)
-        }
+        if (!newFile.exists()) { newFile.parentFile?.mkdirs(); File("${ConfigConstant.CONFIG_FILE_FOLDER_ORIGINAL}${ConfigConstant.CONFIG_FILE_JSON}").copyTo(newFile) }
     }
 
     private fun Method.checkIsGetUsersMethod(): Boolean {
