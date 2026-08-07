@@ -10,11 +10,12 @@ import cn.geektang.privacyspace.hook.Hooker
 import cn.geektang.privacyspace.util.ConfigHelper.getPackageName
 import cn.geektang.privacyspace.util.XLog
 import cn.geektang.privacyspace.util.tryLoadClass
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import io.github.libxposed.api.XposedInterface
+import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.annotations.AfterInvocation
+import io.github.libxposed.api.annotations.XposedHooker
 
-object SettingsAppHookImpl : Hooker, XC_MethodHook() {
+object SettingsAppHookImpl : Hooker {
 
     override fun start(classLoader: ClassLoader) {
         val packageManagerClass = try {
@@ -28,79 +29,64 @@ object SettingsAppHookImpl : Hooker, XC_MethodHook() {
             when (method.name) {
                 "getInstalledPackages", "getInstalledApplications", "getInstalledModules", "queryIntentActivities" -> {
                     XLog.d("Hook method ${method.name}")
-                    XposedBridge.hookMethod(method, this)
+                    XposedModule.hook(method, SettingsPackageManagerMethodHooker::class.java)
                 }
                 else -> {}
             }
         }
 
-        XposedHelpers.findAndHookMethod(
-            UsageStatsManager::class.java,
-            "queryUsageStats",
-            Int::class.javaPrimitiveType,
-            Long::class.javaPrimitiveType,
-            Long::class.javaPrimitiveType,
-            this
-        )
+        // Hook UsageStatsManager.queryUsageStats
+        try {
+            val queryUsageStatsMethod = UsageStatsManager::class.java.getDeclaredMethod(
+                "queryUsageStats",
+                Int::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType
+            )
+            XposedModule.hook(queryUsageStatsMethod, UsageStatsHooker::class.java)
+        } catch (_: Exception) {}
 
-        XposedHelpers.findAndHookMethod(
-            ActivityManager::class.java,
-            "getRunningAppProcesses",
-            this
-        )
+        // Hook ActivityManager.getRunningAppProcesses
+        try {
+            val getRunningAppProcessesMethod = ActivityManager::class.java.getDeclaredMethod("getRunningAppProcesses")
+            XposedModule.hook(getRunningAppProcessesMethod, SettingsRunningAppProcessesHooker::class.java)
+        } catch (_: Exception) {}
     }
 
-    override fun afterHookedMethod(param: MethodHookParam) {
-        val hiddenAppList = HookMain.configData.hiddenAppList
-        when (param.method.name) {
-            "getInstalledPackages" -> {
-                val result = param.result as ParceledListSlice<PackageInfo>
-                val iterator = result.list.iterator()
-                while (iterator.hasNext()) {
-                    val packageInfo = iterator.next()
-                    if (hiddenAppList.contains(packageInfo.packageName)) {
-                        iterator.remove()
-                        XLog.i("com.android.settings was prevented from reading ${packageInfo.packageName}.")
-                    }
-                }
-            }
-            "getInstalledApplications" -> {
-                val result = param.result as ParceledListSlice<ApplicationInfo>
-                val iterator = result.list.iterator()
-                while (iterator.hasNext()) {
-                    val applicationInfo = iterator.next()
-                    if (hiddenAppList.contains(applicationInfo.packageName)) {
-                        iterator.remove()
-                        XLog.i("com.android.settings was prevented from reading ${applicationInfo.packageName}.")
-                    }
-                }
-            }
-            "getInstalledModules" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val result = param.result as MutableList<ModuleInfo>
-                    val iterator = result.iterator()
-                    while (iterator.hasNext()) {
-                        val applicationInfo = iterator.next()
-                        if (hiddenAppList.contains(applicationInfo.packageName)) {
-                            iterator.remove()
-                            XLog.i("com.android.settings was prevented from reading ${applicationInfo.packageName}.")
+    @XposedHooker
+    class SettingsPackageManagerMethodHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                val hiddenAppList = HookMain.configData.hiddenAppList
+                val result = callback.result
+                when {
+                    result is List<*> -> {
+                        callback.result = result.filter { item ->
+                            val packageName = when (item) {
+                                is PackageInfo -> item.packageName
+                                is ApplicationInfo -> item.packageName
+                                is ModuleInfo -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) item.packageName else null
+                                is ResolveInfo -> item.getPackageName()
+                                else -> null
+                            }
+                            packageName == null || !hiddenAppList.contains(packageName)
                         }
                     }
                 }
             }
-            "queryIntentActivities" -> {
-                val result = param.result as ParceledListSlice<ResolveInfo>
-                val iterator = result.list.iterator()
-                while (iterator.hasNext()) {
-                    val resolveInfo = iterator.next()
-                    if (hiddenAppList.contains(resolveInfo.getPackageName())) {
-                        iterator.remove()
-                        XLog.i("com.android.settings was prevented from reading ${resolveInfo.getPackageName()}.")
-                    }
-                }
-            }
-            "queryUsageStats" -> {
-                val result = param.result as MutableList<UsageStats>
+        }
+    }
+
+    @XposedHooker
+    class UsageStatsHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                val result = callback.result as? MutableList<UsageStats> ?: return
+                val hiddenAppList = HookMain.configData.hiddenAppList
                 val iterator = result.iterator()
                 while (iterator.hasNext()) {
                     val usageStats = iterator.next()
@@ -110,20 +96,28 @@ object SettingsAppHookImpl : Hooker, XC_MethodHook() {
                     }
                 }
             }
-            "getRunningAppProcesses" -> {
-                val result = param.result as? List<*> ?: return
-                param.result = result.filter {
+        }
+    }
+
+    @XposedHooker
+    class SettingsRunningAppProcessesHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                val result = callback.result as? List<*> ?: return
+                val hiddenAppList = HookMain.configData.hiddenAppList
+                callback.result = result.filter {
                     it as ActivityManager.RunningAppProcessInfo
                     var shouldFilter = false
-                    it.pkgList.forEach {
-                        if (hiddenAppList.contains(it)) {
+                    it.pkgList.forEach { pkg ->
+                        if (hiddenAppList.contains(pkg)) {
                             shouldFilter = true
                         }
                     }
                     !shouldFilter
                 }
             }
-            else -> {}
         }
     }
 }

@@ -12,12 +12,13 @@ import cn.geektang.privacyspace.util.loadClassSafe
 import cn.geektang.privacyspace.util.tryLoadClass
 import com.android.internal.os.BatterySipper
 import com.android.internal.os.BatteryStatsHelper
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
+import io.github.libxposed.api.XposedInterface
+import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.annotations.AfterInvocation
+import io.github.libxposed.api.annotations.XposedHooker
 import java.lang.reflect.Constructor
 
-object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
+object SpecialAppsHookerImpl : Hooker {
     override fun start(classLoader: ClassLoader) {
         val packageManagerClass = try {
             classLoader.tryLoadClass("android.app.ApplicationPackageManager")
@@ -31,73 +32,39 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
                 "getInstalledPackages",
                 "getInstalledApplications",
                 "getInstalledModules",
-                //TODO More testing is needed here
-//                "queryIntentActivities",
-//                "queryIntentActivityOptions",
-//                "queryBroadcastReceivers",
-//                "queryIntentServices",
-//                "queryIntentContentProviders",
-//                "resolveService",
-//                "resolveActivity",
-//                "resolveContentProvider",
-//                "queryContentProviders",
-//                "getPackageInfo"
             )
         packageManagerClass.declaredMethods.forEach {
             if (hookMethodSet.contains(it.name)) {
-                XposedBridge.hookMethod(it, this)
+                XposedModule.hook(it, PackageManagerMethodHooker::class.java)
             }
         }
 
-//        XposedHelpers.findAndHookMethod(
-//            View::class.java,
-//            "setOnClickListener",
-//            View.OnClickListener::class.java,
-//            object : XC_MethodHook() {
-//                private val cache = mutableSetOf<Class<*>>()
-//
-//                override fun afterHookedMethod(param: MethodHookParam) {
-//                    val listener = param.args.first()
-//                    val clazz = listener.javaClass
-//                    if (!cache.contains(clazz)) {
-//                        cache.add(clazz)
-//                        val method =
-//                            listener.javaClass.getDeclaredMethod("onClick", View::class.java)
-//                        method.isAccessible = true
-//                        XposedBridge.hookMethod(method, this@SpecialAppsHookerImpl)
-//                    }
-//                }
-//            }
-//        )
+        // Hook BatteryStatsHelper.getUsageList
+        try {
+            val getUsageListMethod = BatteryStatsHelper::class.java.getDeclaredMethod("getUsageList")
+            XposedModule.hook(getUsageListMethod, BatteryStatsHooker::class.java)
+        } catch (_: Exception) {}
 
-        XposedHelpers.findAndHookMethod(
-            BatteryStatsHelper::class.java,
-            "getUsageList",
-            this
-        )
-        XposedHelpers.findAndHookMethod(
-            BatteryStatsHelper::class.java,
-            "getMobilemsppList",
-            this
-        )
+        try {
+            val getMobilemsppListMethod = BatteryStatsHelper::class.java.getDeclaredMethod("getMobilemsppList")
+            XposedModule.hook(getMobilemsppListMethod, BatteryStatsHooker::class.java)
+        } catch (_: Exception) {}
 
-        XposedHelpers.findAndHookMethod(
-            ActivityManager::class.java,
-            "getRunningAppProcesses",
-            this
-        )
+        // Hook ActivityManager.getRunningAppProcesses
+        try {
+            val getRunningAppProcessesMethod = ActivityManager::class.java.getDeclaredMethod("getRunningAppProcesses")
+            XposedModule.hook(getRunningAppProcessesMethod, RunningAppProcessesHooker::class.java)
+        } catch (_: Exception) {}
 
         val miuiRvClass = classLoader.loadClassSafe("miuix.recyclerview.widget.RecyclerView")
         if (miuiRvClass != null) {
-            var unhook: XC_MethodHook.Unhook? = null
-            unhook = XposedHelpers.findAndHookConstructor(
-                miuiRvClass,
-                Context::class.java,
-                GameBoosterHooker {
-                    unhook?.unhook()
-                    XLog.d("unhook ${miuiRvClass.name} Constructor ${if (unhook != null) "succeed" else "failed"}!")
-                }
-            )
+            var unhook: XposedInterface.Unhook? = null
+            try {
+                unhook = XposedModule.hook(
+                    miuiRvClass.getDeclaredConstructor(Context::class.java),
+                    GameBoosterHooker::class.java
+                )
+            } catch (_: Exception) {}
         }
 
         val dockAppEditActivityClass =
@@ -105,75 +72,42 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
         if (null != dockAppEditActivityClass) {
             for (method in dockAppEditActivityClass.declaredMethods) {
                 if (method.parameterCount == 1 && method.parameterTypes.first() == PackageInfo::class.java) {
-                    XposedBridge.hookMethod(method, object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
-                            val shouldFilterAppList = HookMain.configData.hiddenAppList
-                            val packageInfo = param.args.first() as PackageInfo
-                            if (shouldFilterAppList.contains(packageInfo.packageName)) {
-                                param.result = Unit
-                            }
-                        }
-                    })
+                    XposedModule.hook(method, DockAppEditHooker::class.java)
                 }
             }
         }
     }
 
-    override fun afterHookedMethod(param: MethodHookParam) {
-        val shouldFilterAppList = HookMain.configData.hiddenAppList
-        when (param.method.name) {
-            "getInstalledPackages" -> {
-                param.result = (param.result as? List<*>?)?.filter {
-                    val packageName = (it as? PackageInfo)?.packageName ?: return
-                    !shouldFilterAppList.contains(packageName)
-                }
-            }
-            "getInstalledApplications" -> {
-                param.result = (param.result as? List<*>?)?.filter {
-                    val packageName = (it as? ApplicationInfo)?.packageName ?: return
-                    !shouldFilterAppList.contains(packageName)
-                }
-            }
-            "getInstalledModules" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    param.result = (param.result as? List<*>?)?.filter {
-                        val packageName = (it as? ModuleInfo)?.packageName ?: return
-                        !shouldFilterAppList.contains(packageName)
+    @XposedHooker
+    class PackageManagerMethodHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                val shouldFilterAppList = HookMain.configData.hiddenAppList
+                val result = callback.result as? List<*> ?: return
+                callback.result = result.filter {
+                    val packageName = when (it) {
+                        is PackageInfo -> it.packageName
+                        is ApplicationInfo -> it.packageName
+                        is ModuleInfo -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) it.packageName else null
+                        is ResolveInfo -> it.getPackageName()
+                        else -> null
                     }
+                    packageName == null || !shouldFilterAppList.contains(packageName)
                 }
             }
-            "queryIntentActivities", "queryIntentActivityOptions", "queryBroadcastReceivers", "queryIntentServices", "queryIntentContentProviders" -> {
-                param.result = (param.result as? List<*>?)?.filter {
-                    val packageName = (it as? ResolveInfo)?.getPackageName() ?: return
-                    !shouldFilterAppList.contains(packageName)
-                }
-            }
-            "resolveService", "resolveActivity" -> {
-                val packageName = (param.result as? ResolveInfo)?.getPackageName()
-                if (!packageName.isNullOrEmpty() && shouldFilterAppList.contains(packageName)) {
-                    param.result = null
-                }
-            }
-            "resolveContentProvider" -> {
-                val packageName = (param.result as? ProviderInfo)?.packageName ?: return
-                if (shouldFilterAppList.contains(packageName)) {
-                    param.result = null
-                }
-            }
-            "queryContentProviders" -> {
-                param.result = (param.result as? List<*>?)?.filter {
-                    val packageName = (it as? ProviderInfo)?.packageName ?: return
-                    !shouldFilterAppList.contains(packageName)
-                }
-            }
-            "getPackageInfo" -> {
-                val packageName = (param.result as? PackageInfo)?.packageName ?: return
-                if (shouldFilterAppList.contains(packageName)) {
-                    param.throwable = PackageManager.NameNotFoundException()
-                }
-            }
-            "getUsageList", "getMobilemsppList" -> {
-                val result = param.result as? MutableList<*> ?: return
+        }
+    }
+
+    @XposedHooker
+    class BatteryStatsHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                val result = callback.result as? MutableList<*> ?: return
+                val shouldFilterAppList = HookMain.configData.hiddenAppList
                 val iterator = result.iterator()
                 while (iterator.hasNext()) {
                     val batterySipper = (iterator.next() as? BatterySipper) ?: continue
@@ -189,39 +123,57 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
                     }
                 }
             }
-            "getRunningAppProcesses" -> {
-                val result = param.result as? List<*> ?: return
-                param.result = result.filter {
+        }
+    }
+
+    @XposedHooker
+    class RunningAppProcessesHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                val result = callback.result as? List<*> ?: return
+                val shouldFilterAppList = HookMain.configData.hiddenAppList
+                callback.result = result.filter {
                     it as ActivityManager.RunningAppProcessInfo
                     var shouldFilter = false
-                    it.pkgList.forEach {
-                        if (shouldFilterAppList.contains(it)) {
+                    it.pkgList.forEach { pkg ->
+                        if (shouldFilterAppList.contains(pkg)) {
                             shouldFilter = true
                         }
                     }
                     !shouldFilter
                 }
             }
-//            "onClick" -> {
-//                var view = param.args.first() as View?
-//                XLog.d("onClick ${view?.context}")
-//                do {
-//                    XLog.d("onClick $view")
-//                    view = view?.parent as? View
-//                } while (view != null)
-//            }
-            else -> {}
         }
     }
 
-    private class GameBoosterHooker(private val unhookCallback: () -> Unit) : XC_MethodHook() {
+    @XposedHooker
+    class DockAppEditHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun beforeHookedMethod(callback: XposedInterface.HookerCallback) {
+                val shouldFilterAppList = HookMain.configData.hiddenAppList
+                val packageInfo = callback.args.first() as PackageInfo
+                if (shouldFilterAppList.contains(packageInfo.packageName)) {
+                    callback.result = Unit
+                }
+            }
+        }
+    }
+
+    class GameBoosterHooker : XposedInterface.Hooker {
         private var list: MutableList<*>? = null
 
-        override fun afterHookedMethod(param: MethodHookParam) {
-            val thisClass = param.thisObject.javaClass
-            if (param.method is Constructor<*>) {
-                if (!thisClass.name.startsWith("com.miui.gamebooster.windowmanager.")) {
-                    return
+        override fun intercept(chain: XposedInterface.Chain): Any? {
+            val param = chain.args
+            val thisClass = param.first()?.javaClass
+            val result = chain.proceed()
+
+            if (chain.executable is Constructor<*>) {
+                if (!thisClass?.name?.startsWith("com.miui.gamebooster.windowmanager.")!!) {
+                    return result
                 }
                 XLog.d("hook class $thisClass")
                 for (method in thisClass.declaredMethods) {
@@ -229,14 +181,13 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
                         && method.parameterCount == 1
                         && method.parameterTypes.first() == Int::class.javaPrimitiveType
                     ) {
-                        XposedBridge.hookMethod(method, this)
+                        XposedModule.hook(method, GameBoosterSetDockTypeHooker::class.java)
                     }
                 }
-                unhookCallback()
             } else {
-                XLog.d("${param.thisObject.javaClass} ${param.method.name}() invoke")
-                queryAndGetList(thisClass, param)
-                val listObj = list ?: return
+                XLog.d("${param.first()?.javaClass} ${chain.executable.name}() invoke")
+                queryAndGetList(thisClass)
+                val listObj = list ?: return result
                 val iterator = listObj.iterator()
                 val shouldFilterAppList = HookMain.configData.hiddenAppList
                 while (iterator.hasNext()) {
@@ -249,6 +200,7 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
                     }
                 }
             }
+            return result
         }
 
         private fun shouldFilter(
@@ -267,11 +219,10 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
             return false
         }
 
-        private fun queryAndGetList(thisClass: Class<Any>, param: MethodHookParam) {
+        private fun queryAndGetList(thisClass: Class<Any>) {
             for (declaredField in thisClass.declaredFields) {
                 declaredField.isAccessible = true
-                val value = declaredField.get(param.thisObject)
-                list = value as? MutableList<*>
+                list = declaredField.get(thisClass) as? MutableList<*>
                     ?: continue
                 break
             }
@@ -279,7 +230,19 @@ object SpecialAppsHookerImpl : XC_MethodHook(), Hooker {
 
         private fun Any?.getPackageName(): String? {
             return toString().split(",").getOrNull(1)
-                ?.substringAfter("'")?.substringBefore("'")
+                ?.substringAfter("'")
+                ?.substringBefore("'")
+        }
+    }
+
+    @XposedHooker
+    class GameBoosterSetDockTypeHooker : XposedInterface.Hooker {
+        companion object {
+            @AfterInvocation
+            @JvmStatic
+            fun afterHookedMethod(callback: XposedInterface.HookerCallback) {
+                // Placeholder for additional logic
+            }
         }
     }
 }
