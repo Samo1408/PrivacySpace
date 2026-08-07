@@ -18,34 +18,21 @@ object HookChecker {
     private var defaultBlindWhitelist: Set<String> = emptySet()
 
     @JvmStatic
-    fun shouldIntercept(
-        classLoader: ClassLoader,
-        userId: Int,
-        targetPackageName: String,
-        callingPackageName: String
-    ): Boolean {
-        if (greenChannel) {
-            return false
-        }
+    fun shouldIntercept(classLoader: ClassLoader, userId: Int, targetPackageName: String, callingPackageName: String): Boolean {
+        if (greenChannel) return false
 
         if (defaultBlindWhitelist.isEmpty()) {
             greenChannel = true
-
             val sharedUserIdMap = getSharedUserIdMap(classLoader)
             if (null != sharedUserIdMap) {
-                val defaultBlindWhitelist = ConfigConstant.defaultBlindWhitelist.toMutableSet()
-                for (white in ConfigConstant.defaultBlindWhitelist) {
-                    val value = sharedUserIdMap[white] ?: emptyList()
-                    defaultBlindWhitelist.addAll(value)
-                }
-                this@HookChecker.defaultBlindWhitelist = defaultBlindWhitelist
+                val blindWhitelist = ConfigConstant.defaultBlindWhitelist.toMutableSet()
+                for (white in ConfigConstant.defaultBlindWhitelist) blindWhitelist.addAll(sharedUserIdMap[white] ?: emptyList())
+                this@HookChecker.defaultBlindWhitelist = blindWhitelist
             }
         }
         greenChannel = false
 
-        if (callingPackageName == targetPackageName) {
-            return false
-        }
+        if (callingPackageName == targetPackageName) return false
 
         var result = false
         val configData = HookMain.configData
@@ -54,8 +41,6 @@ object HookChecker {
         val connectedAppsInfoMap = configData.connectedApps
         val multiUserConfig = configData.multiUserConfig ?: emptyMap()
         val blindApps = configData.blind ?: emptySet()
-        val defaultWhitelist = ConfigConstant.defaultWhitelist
-        val defaultBlindWhitelist = defaultBlindWhitelist
         XLog.enableLog = configData.enableDetailLog
 
         if (defaultBlindWhitelist.isNotEmpty()
@@ -63,26 +48,15 @@ object HookChecker {
             && blindApps.contains(callingPackageName)
             && connectedAppsInfoMap[callingPackageName]?.contains(targetPackageName) != true
             && connectedAppsInfoMap[targetPackageName]?.contains(callingPackageName) != true
-        ) {
-            XLog.d("$callingPackageName was prevented from reading ${targetPackageName}.")
-            return true
-        }
+        ) { XLog.d("$callingPackageName was prevented from reading $targetPackageName."); return true }
 
-        if (!defaultWhitelist.contains(callingPackageName)
-            && shouldFilterAppList.contains(targetPackageName)
-        ) {
+        if (!ConfigConstant.defaultWhitelist.contains(callingPackageName) && shouldFilterAppList.contains(targetPackageName)) {
             val appMultiUserConfig = multiUserConfig[targetPackageName]
-            // User's custom whitelist and 'connected apps'
             if (!userWhitelist.contains(callingPackageName)
                 && connectedAppsInfoMap[callingPackageName]?.contains(targetPackageName) != true
                 && connectedAppsInfoMap[targetPackageName]?.contains(callingPackageName) != true
                 && (appMultiUserConfig.isNullOrEmpty() || appMultiUserConfig.contains(userId))
-            ) {
-                XLog.d("$callingPackageName was prevented from reading ${targetPackageName}.")
-                result = true
-            } else {
-                XLog.d("$callingPackageName read ${targetPackageName}.")
-            }
+            ) { result = true; XLog.d("$callingPackageName was prevented from reading $targetPackageName.") }
         }
         return result
     }
@@ -90,78 +64,31 @@ object HookChecker {
     private fun getSharedUserIdMap(classLoader: ClassLoader): Map<String, List<String>>? {
         val pms = ServiceManager.getService("package")
         val pmsClass = HookUtil.loadPms(classLoader)
-        if (pms?.javaClass == pmsClass) {
-            return if (Build.VERSION.SDK_INT >= 29) {
-                getSharedUidMapAfterQ(pms)
-            } else {
-                getSharedUidMapCompat(pms)
-            }
-        }
+        if (pms?.javaClass == pmsClass) return if (Build.VERSION.SDK_INT >= 29) getSharedUidMapAfterQ(pms) else getSharedUidMapCompat(pms)
         return null
     }
 
-    // more efficient
-    private fun getSharedUidMapAfterQ(pms: Any): Map<String, List<String>>? {
+    private fun getSharedUidMapAfterQ(pms: Any): Map<String, List<String>>? = try {
         val pmsClass = pms.javaClass
-        return try {
-            val getAppsWithSharedUserMethod =
-                pmsClass.getDeclaredMethod("getAppsWithSharedUserIdsLocked")
-            getAppsWithSharedUserMethod.isAccessible = true
-            val getPackagesForUidMethod = pmsClass.getDeclaredMethod(
-                "getPackagesForUid",
-                Int::class.javaPrimitiveType
-            )
-            getPackagesForUidMethod.isAccessible = true
-
-            val sharedUserIdMap = ArrayMap<String, List<String>>()
-            val result = getAppsWithSharedUserMethod.invoke(pms) as SparseArray<*>
-            result.forEach { key, value ->
-                val packages =
-                    getPackagesForUidMethod.invoke(
-                        pms,
-                        key
-                    ) as Array<*>
-                sharedUserIdMap[value.toString()] = (packages as Array<String>).toList()
-            }
-            sharedUserIdMap
-        } catch (e: Throwable) {
-            getSharedUidMapCompat(pms)
+        val getAppsWithSharedUserMethod = pmsClass.getDeclaredMethod("getAppsWithSharedUserIdsLocked").apply { isAccessible = true }
+        val getPackagesForUidMethod = pmsClass.getDeclaredMethod("getPackagesForUid", Int::class.javaPrimitiveType).apply { isAccessible = true }
+        val sharedUserIdMap = ArrayMap<String, List<String>>()
+        (getAppsWithSharedUserMethod.invoke(pms) as SparseArray<*>).forEach { key, value ->
+            sharedUserIdMap[value.toString()] = (getPackagesForUidMethod.invoke(pms, key) as Array<*>).map { it.toString() }
         }
-    }
+        sharedUserIdMap
+    } catch (_: Throwable) { getSharedUidMapCompat(pms) }
 
-    // better compatibility
-    private fun getSharedUidMapCompat(pms: Any): Map<String, List<String>>? {
+    private fun getSharedUidMapCompat(pms: Any): Map<String, List<String>>? = try {
         val pmsClass = pms.javaClass
-        return try {
-            val getInstalledPackagesMethod = pmsClass.getDeclaredMethod(
-                "getInstalledPackages",
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType
-            ) ?: return null
-            getInstalledPackagesMethod.isAccessible = true
-            val resultParceledListSlice = getInstalledPackagesMethod.invoke(
-                pms,
-                PackageManager.MATCH_UNINSTALLED_PACKAGES,
-                0
-            )
-            val listMethod = resultParceledListSlice.javaClass.getDeclaredMethod("getList")
-            listMethod.isAccessible = true
-            val resultList = listMethod.invoke(resultParceledListSlice) as? List<*> ?: return null
-            val sharedUserIdMap = ArrayMap<String, MutableList<String>>()
-            for (packageInfo in resultList) {
-                if (packageInfo !is PackageInfo) return null
-                val sharedUserId = packageInfo.sharedUserId
-                if (sharedUserId.isNullOrEmpty()) {
-                    continue
-                }
-                val sharedUserIdPackages =
-                    sharedUserIdMap.getOrDefault(sharedUserId, mutableListOf())
-                sharedUserIdPackages.add(packageInfo.packageName)
-                sharedUserIdMap[sharedUserId] = sharedUserIdPackages
-            }
-            sharedUserIdMap
-        } catch (e: Throwable) {
-            null
+        val getInstalledPackagesMethod = pmsClass.getDeclaredMethod("getInstalledPackages", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).apply { isAccessible = true }
+        val resultSlice = getInstalledPackagesMethod.invoke(pms, PackageManager.MATCH_UNINSTALLED_PACKAGES, 0)
+        val resultList = resultSlice.javaClass.getDeclaredMethod("getList").apply { isAccessible = true }.invoke(resultSlice) as? List<*> ?: return null
+        val sharedUserIdMap = ArrayMap<String, MutableList<String>>()
+        for (packageInfo in resultList) {
+            if (packageInfo !is PackageInfo || packageInfo.sharedUserId.isNullOrEmpty()) continue
+            sharedUserIdMap.getOrPut(packageInfo.sharedUserId!!) { mutableListOf() }.add(packageInfo.packageName)
         }
-    }
+        sharedUserIdMap
+    } catch (_: Throwable) { null }
 }
