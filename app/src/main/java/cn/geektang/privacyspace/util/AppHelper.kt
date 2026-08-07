@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.*
 
+@Suppress("DEPRECATION")
 object AppHelper {
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
     val allApps: Flow<List<AppInfo>> = _allApps
@@ -41,7 +42,6 @@ object AppHelper {
                 context.showToast(R.string.tips_get_apps_failed)
             }
             delay(1000)
-            // retry after 1 seconds
             initialize(context)
             return
         }
@@ -54,7 +54,7 @@ object AppHelper {
             return@withContext packageManager
                 .getInstalledPackages(PackageManager.MATCH_UNINSTALLED_PACKAGES or PackageManager.GET_META_DATA)
                 .mapNotNull { packageInfo ->
-                    val applicationInfo = packageInfo.applicationInfo
+                    val applicationInfo = packageInfo.applicationInfo ?: return@mapNotNull null
                     val appName = applicationInfo.loadLabel(packageManager).toString()
                     val appIcon = applicationInfo.loadIcon(packageManager)
                     AppInfo(
@@ -177,7 +177,7 @@ object AppHelper {
         packageFilter.addDataScheme("package")
         val receiver = object : BroadcastReceiver() {
             val scope = MainScope()
-            override fun onReceive(cotext: Context, intent: Intent) {
+            override fun onReceive(context: Context, intent: Intent) {
                 val packageName = intent.dataString?.substringAfter("package:") ?: return
 
                 when (intent.action) {
@@ -197,7 +197,6 @@ object AppHelper {
                             e.printStackTrace()
                             return
                         }
-                        // switch to ui thread
                         scope.launch {
                             val apps = _allApps.value.toMutableList()
                             apps.add(appInfo)
@@ -222,7 +221,7 @@ object AppHelper {
         val packageManager = context.packageManager
         val packageInfo =
             getPackageInfo(context, packageName, PackageManager.GET_META_DATA) ?: return null
-        val applicationInfo = packageInfo.applicationInfo
+        val applicationInfo = packageInfo.applicationInfo ?: return null
         val appName = applicationInfo.loadLabel(packageManager).toString()
         val appIcon = applicationInfo.loadIcon(packageManager)
         return AppInfo(
@@ -232,7 +231,7 @@ object AppHelper {
             appIcon = appIcon,
             sharedUserId = packageInfo.sharedUserId,
             isSystemApp = isSystemApp(applicationInfo),
-            isXposedModule = packageInfo.applicationInfo.isXposedModule()
+            isXposedModule = packageInfo.applicationInfo!!.isXposedModule()
         )
     }
 }

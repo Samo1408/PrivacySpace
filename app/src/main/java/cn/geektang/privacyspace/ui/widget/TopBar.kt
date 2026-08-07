@@ -2,9 +2,12 @@ package cn.geektang.privacyspace.ui.widget
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -16,7 +19,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import cn.geektang.privacyspace.R
-import com.google.accompanist.insets.statusBarsPadding
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -38,7 +40,17 @@ fun TopBar(
         color = MaterialTheme.colors.primarySurface,
         elevation = AppBarDefaults.TopAppBarElevation
     ) {
-        Box(modifier = Modifier.statusBarsPadding()) {
+        val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
+        Box(
+            modifier = Modifier
+                .then(
+                    Modifier.padding(
+                        top = statusBarPadding.calculateTopPadding(),
+                        start = statusBarPadding.calculateStartPadding(),
+                        end = statusBarPadding.calculateEndPadding()
+                    )
+                )
+        ) {
             TopAppBar(
                 title = {
                     Text(text = title)
@@ -58,7 +70,7 @@ private fun NavigationIcon(onNavigationIconClick: (() -> Unit)?) {
         onNavigationIconClick?.invoke()
     }) {
         Icon(
-            imageVector = Icons.Default.ArrowBack,
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = stringResource(R.string.back)
         )
     }
@@ -76,7 +88,17 @@ fun SearchTopBar(
         color = MaterialTheme.colors.primarySurface,
         elevation = AppBarDefaults.TopAppBarElevation
     ) {
-        Box(modifier = Modifier.statusBarsPadding()) {
+        val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
+        Box(
+            modifier = Modifier
+                .then(
+                    Modifier.padding(
+                        top = statusBarPadding.calculateTopPadding(),
+                        start = statusBarPadding.calculateStartPadding(),
+                        end = statusBarPadding.calculateEndPadding()
+                    )
+                )
+        ) {
             SearchTopBarInner(
                 title = title,
                 searchText = searchText,
@@ -121,7 +143,7 @@ private fun SearchTopBarInner(
                     }
                 }) {
                     Icon(
-                        imageVector = Icons.Default.Search,
+                        imageVector = Icons.Filled.Search,
                         contentDescription = stringResource(R.string.menu)
                     )
                 }
@@ -131,7 +153,7 @@ private fun SearchTopBarInner(
                 showMorePopupState.value = true
             }) {
                 Icon(
-                    imageVector = Icons.Default.MoreVert,
+                    imageVector = Icons.Filled.MoreVert,
                     contentDescription = stringResource(R.string.menu)
                 )
             }
@@ -148,7 +170,7 @@ private fun SearchTopBarInner(
                 }
             }) {
                 Icon(
-                    imageVector = Icons.Default.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = stringResource(R.string.back)
                 )
             }
@@ -184,7 +206,7 @@ private fun RowScope.SearchBoxTextField(
             if (searchText.isNotEmpty()) {
                 IconButton(onClick = { onSearchTextChange("") }) {
                     Icon(
-                        imageVector = Icons.Default.Clear,
+                        imageVector = Icons.Filled.Clear,
                         tint = Color(0xccffffff),
                         contentDescription = stringResource(R.string.clear)
                     )
