@@ -8,15 +8,17 @@ import cn.geektang.privacyspace.bean.ConfigData
 import cn.geektang.privacyspace.constant.ConfigConstant
 import cn.geektang.privacyspace.hook.impl.*
 import cn.geektang.privacyspace.util.*
-import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
+import io.github.libxposed.api.XposedInterface
+import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.XposedModuleInterface
+import io.github.libxposed.api.annotations.AfterInvocation
+import io.github.libxposed.api.annotations.BeforeInvocation
+import io.github.libxposed.api.annotations.XposedHooker
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import java.io.File
 
-class HookMain : IXposedHookLoadPackage {
+class HookMain(base: XposedInterface, modulePath: String) : XposedModule(base, modulePath) {
 
     companion object {
         private lateinit var classLoader: ClassLoader
@@ -66,10 +68,11 @@ class HookMain : IXposedHookLoadPackage {
         }
     }
 
-    override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        packageName = lpparam.packageName
-        classLoader = lpparam.classLoader
-        if (lpparam.packageName == ConfigConstant.ANDROID_FRAMEWORK) {
+    override fun onPackageLoaded(packageLoadedParam: XposedModuleInterface.PackageLoadedParam) {
+        packageName = packageLoadedParam.packageName
+        classLoader = packageLoadedParam.classLoader
+
+        if (packageLoadedParam.packageName == ConfigConstant.ANDROID_FRAMEWORK) {
             loadConfigDataAndParse()
             configServer.start(classLoader = classLoader)
             when {
@@ -83,14 +86,12 @@ class HookMain : IXposedHookLoadPackage {
                     FrameworkHookerApi26Impl.start(classLoader)
                 }
             }
-        } else if ("com.android.settings" == lpparam.packageName) {
+        } else if ("com.android.settings" == packageLoadedParam.packageName) {
             SettingsAppHookImpl.start(classLoader)
-            XposedHelpers.findAndHookMethod(
-                Application::class.java,
-                "onCreate",
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val configClient = ConfigClient(param.thisObject as Context)
+            hook(Application::class.java.getDeclaredMethod("onCreate"))
+                .intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? {
+                        val configClient = ConfigClient(chain.args[0] as Context)
                         MainScope().launch {
                             val config = configClient.queryConfig()
                             XLog.i("config = $config")
@@ -98,13 +99,33 @@ class HookMain : IXposedHookLoadPackage {
                                 updateConfigData(config)
                             }
                         }
+                        return chain.proceed()
                     }
                 })
-        } else if (AppHelper.isSystemApp(lpparam.appInfo)) {
+        } else if (packageLoadedParam.appInfo != null && AppHelper.isSystemApp(packageLoadedParam.appInfo)) {
             XLog.i("Hook class fdfasdfs start.")
             loadConfigDataAndParse()
             startWatchingConfigFiles()
             SpecialAppsHookerImpl.start(classLoader)
+        }
+    }
+
+    override fun onSystemServerLoaded(systemServerLoadedParam: XposedModuleInterface.SystemServerLoadedParam) {
+        super.onSystemServerLoaded(systemServerLoadedParam)
+        packageName = "android"
+        classLoader = systemServerLoadedParam.classLoader
+        loadConfigDataAndParse()
+        configServer.start(classLoader = classLoader)
+        when {
+            Build.VERSION.SDK_INT >= 30 -> {
+                FrameworkHookerApi30Impl.start(classLoader)
+            }
+            Build.VERSION.SDK_INT >= 28 -> {
+                FrameworkHookerApi28Impl.start(classLoader)
+            }
+            else -> {
+                FrameworkHookerApi26Impl.start(classLoader)
+            }
         }
     }
 
