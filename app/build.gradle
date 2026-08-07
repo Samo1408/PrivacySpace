@@ -22,24 +22,32 @@ android {
         }
     }
 
+    // Signing config: only configure if env vars are set (not on CI)
     signingConfigs {
-        release {
-            keyAlias System.env.Space_keyAlias
-            keyPassword System.env.Space_keyPassword
-            storeFile file(System.env.Space_storeFile)
-            storePassword System.env.Space_storePassword
+        if (System.env.Space_storeFile != null && !System.env.Space_storeFile.empty) {
+            release {
+                keyAlias System.env.Space_keyAlias
+                keyPassword System.env.Space_keyPassword
+                storeFile file(System.env.Space_storeFile)
+                storePassword System.env.Space_storePassword
+            }
         }
     }
 
     buildTypes {
         debug {
-            buildConfigField('String', 'APP_CENTER_SECRET', "\"${System.env.Space_AppCenterSecret}\"")
-            signingConfig signingConfigs.release
+            buildConfigField('String', 'APP_CENTER_SECRET', "\"${System.env.Space_AppCenterSecret ?: ''}\"")
+            // Skip signing on CI
+            if (signingConfigs.hasProperty('release')) {
+                signingConfig signingConfigs.release
+            }
         }
         release {
-            buildConfigField('String', 'APP_CENTER_SECRET', "\"${System.env.Space_AppCenterSecret}\"")
+            buildConfigField('String', 'APP_CENTER_SECRET', "\"${System.env.Space_AppCenterSecret ?: ''}\"")
             minifyEnabled false
-            signingConfig signingConfigs.release
+            if (signingConfigs.hasProperty('release')) {
+                signingConfig signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
